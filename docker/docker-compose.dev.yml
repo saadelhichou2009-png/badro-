@@ -1,0 +1,52 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: trading_postgres_dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: trading_user
+      POSTGRES_PASSWORD: dev_password
+      POSTGRES_DB: trading_platform_dev
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - trading_network_dev
+
+  redis:
+    image: redis:7-alpine
+    container_name: trading_redis_dev
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - trading_network_dev
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.dev
+    container_name: trading_backend_dev
+    restart: unless-stopped
+    env_file:
+      - ../backend/.env
+    volumes:
+      - ../backend/src:/app/src
+      - ../backend/prisma:/app/prisma
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "4000:4000"
+    networks:
+      - trading_network_dev
+
+networks:
+  trading_network_dev:
+    driver: bridge
+
+volumes:
+  postgres_dev_data:

@@ -1,0 +1,335 @@
+// =====================================================================
+// Trading Analytics Platform - Prisma Schema
+// PostgreSQL Database Schema - Production Ready
+// =====================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =====================================================================
+// ENUMS
+// =====================================================================
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum AccountStatus {
+  PENDING     // بانتظار أول اتصال من الـ EA
+  ACTIVE
+  DISCONNECTED
+  SUSPENDED
+}
+
+enum PlatformType {
+  MT4
+  MT5
+}
+
+enum TradeType {
+  BUY
+  SELL
+  BUY_LIMIT
+  SELL_LIMIT
+  BUY_STOP
+  SELL_STOP
+}
+
+enum TradeStatus {
+  OPEN
+  CLOSED
+  CANCELLED
+}
+
+enum NotificationType {
+  INFO
+  WARNING
+  ERROR
+  SUCCESS
+}
+
+enum LogLevel {
+  INFO
+  WARN
+  ERROR
+  DEBUG
+}
+
+// =====================================================================
+// USERS & AUTH
+// =====================================================================
+
+model User {
+  id                String    @id @default(uuid())
+  email             String    @unique
+  password          String
+  firstName         String
+  lastName          String
+  role              UserRole  @default(USER)
+
+  isEmailVerified   Boolean   @default(false)
+  emailVerifyToken  String?   @unique
+  emailVerifyExpiry DateTime?
+
+  resetPasswordToken  String?   @unique
+  resetPasswordExpiry DateTime?
+
+  avatarUrl         String?
+  timezone          String    @default("UTC")
+  isActive          Boolean   @default(true)
+
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  lastLoginAt       DateTime?
+
+  // Relations
+  tradingAccounts   TradingAccount[]
+  sessions          Session[]
+  apiKeys           ApiKey[]
+  notifications     Notification[]
+  logs              Log[]
+
+  @@map("users")
+  @@index([email])
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  refreshToken String   @unique
+  userAgent    String?
+  ipAddress    String?
+
+  isRevoked    Boolean  @default(false)
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  @@map("sessions")
+  @@index([userId])
+  @@index([refreshToken])
+}
+
+// =====================================================================
+// TRADING ACCOUNTS
+// =====================================================================
+
+model TradingAccount {
+  id              String        @id @default(uuid())
+  userId          String
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  accountName     String
+  accountNumber   String
+  broker          String
+  server          String
+  platform        PlatformType
+  currency        String        @default("USD")
+  leverage         Int           @default(100)
+
+  status          AccountStatus @default(PENDING)
+
+  // Account snapshot (آخر تحديث من الـ EA)
+  balance         Decimal       @default(0) @db.Decimal(18, 2)
+  equity          Decimal       @default(0) @db.Decimal(18, 2)
+  margin          Decimal       @default(0) @db.Decimal(18, 2)
+  freeMargin      Decimal       @default(0) @db.Decimal(18, 2)
+  marginLevel     Decimal       @default(0) @db.Decimal(18, 2)
+
+  initialBalance  Decimal       @default(0) @db.Decimal(18, 2)
+
+  lastSyncAt      DateTime?
+  isPublic        Boolean       @default(false)
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  // Relations
+  trades          Trade[]
+  statistics      Statistics?
+  apiKeys         ApiKey[]
+  equityHistory   EquityHistory[]
+
+  @@map("trading_accounts")
+  @@unique([userId, accountNumber, server])
+  @@index([userId])
+  @@index([status])
+}
+
+model EquityHistory {
+  id               String         @id @default(uuid())
+  tradingAccountId String
+  tradingAccount   TradingAccount @relation(fields: [tradingAccountId], references: [id], onDelete: Cascade)
+
+  balance          Decimal        @db.Decimal(18, 2)
+  equity           Decimal        @db.Decimal(18, 2)
+  drawdown         Decimal        @default(0) @db.Decimal(18, 2)
+
+  recordedAt       DateTime       @default(now())
+
+  @@map("equity_history")
+  @@index([tradingAccountId, recordedAt])
+}
+
+// =====================================================================
+// TRADES
+// =====================================================================
+
+model Trade {
+  id               String         @id @default(uuid())
+  tradingAccountId String
+  tradingAccount   TradingAccount @relation(fields: [tradingAccountId], references: [id], onDelete: Cascade)
+
+  ticket           String         // رقم التذكرة من MT4/MT5
+  symbol           String
+  type             TradeType
+  status           TradeStatus    @default(OPEN)
+
+  lotSize          Decimal        @db.Decimal(10, 2)
+
+  openPrice        Decimal        @db.Decimal(18, 5)
+  closePrice       Decimal?       @db.Decimal(18, 5)
+
+  stopLoss         Decimal?       @db.Decimal(18, 5)
+  takeProfit       Decimal?       @db.Decimal(18, 5)
+
+  openTime         DateTime
+  closeTime        DateTime?
+
+  commission       Decimal        @default(0) @db.Decimal(18, 2)
+  swap             Decimal        @default(0) @db.Decimal(18, 2)
+  profit           Decimal        @default(0) @db.Decimal(18, 2)
+
+  comment          String?
+  magicNumber      Int?
+
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@map("trades")
+  @@unique([tradingAccountId, ticket])
+  @@index([tradingAccountId])
+  @@index([symbol])
+  @@index([openTime])
+  @@index([status])
+}
+
+// =====================================================================
+// STATISTICS (Cache محسوب دورياً لتسريع الـ Dashboard)
+// =====================================================================
+
+model Statistics {
+  id                  String         @id @default(uuid())
+  tradingAccountId    String         @unique
+  tradingAccount      TradingAccount @relation(fields: [tradingAccountId], references: [id], onDelete: Cascade)
+
+  totalProfit         Decimal        @default(0) @db.Decimal(18, 2)
+  totalLoss           Decimal        @default(0) @db.Decimal(18, 2)
+  netProfit           Decimal        @default(0) @db.Decimal(18, 2)
+
+  totalTrades         Int            @default(0)
+  winningTrades        Int            @default(0)
+  losingTrades         Int            @default(0)
+
+  winRate              Decimal        @default(0) @db.Decimal(5, 2)
+  profitFactor          Decimal        @default(0) @db.Decimal(10, 2)
+
+  averageProfit        Decimal        @default(0) @db.Decimal(18, 2)
+  averageLoss           Decimal        @default(0) @db.Decimal(18, 2)
+  averageRR              Decimal        @default(0) @db.Decimal(10, 2)
+
+  largestProfit         Decimal        @default(0) @db.Decimal(18, 2)
+  largestLoss            Decimal        @default(0) @db.Decimal(18, 2)
+
+  averageTradeDurationMin Int          @default(0)
+  openTradesCount         Int          @default(0)
+
+  currentDrawdown         Decimal      @default(0) @db.Decimal(18, 2)
+  maxDrawdown              Decimal      @default(0) @db.Decimal(18, 2)
+
+  accountGrowthPercent     Decimal      @default(0) @db.Decimal(10, 2)
+
+  updatedAt                DateTime     @updatedAt
+
+  @@map("statistics")
+}
+
+// =====================================================================
+// API KEYS (للربط مع الـ EA)
+// =====================================================================
+
+model ApiKey {
+  id               String          @id @default(uuid())
+  userId           String
+  user             User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tradingAccountId String?
+  tradingAccount   TradingAccount? @relation(fields: [tradingAccountId], references: [id], onDelete: Cascade)
+
+  key              String          @unique  // hashed
+  keyPrefix        String          // للعرض في الواجهة (أول 8 أحرف)
+  label            String?
+
+  isActive         Boolean         @default(true)
+  lastUsedAt       DateTime?
+  expiresAt        DateTime?
+
+  createdAt        DateTime        @default(now())
+
+  @@map("api_keys")
+  @@index([userId])
+  @@index([key])
+}
+
+// =====================================================================
+// NOTIFICATIONS
+// =====================================================================
+
+model Notification {
+  id        String            @id @default(uuid())
+  userId    String
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type      NotificationType  @default(INFO)
+  title     String
+  message   String
+
+  isRead    Boolean           @default(false)
+  createdAt DateTime          @default(now())
+
+  @@map("notifications")
+  @@index([userId, isRead])
+}
+
+// =====================================================================
+// LOGS / AUDIT
+// =====================================================================
+
+model Log {
+  id        String   @id @default(uuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  level     LogLevel @default(INFO)
+  action    String   // e.g. "LOGIN", "TRADE_RECEIVED", "ACCOUNT_CONNECTED"
+  message   String
+  metadata  Json?
+
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now())
+
+  @@map("logs")
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}

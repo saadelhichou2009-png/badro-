@@ -1,0 +1,17 @@
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+# متغيرات البيئة الافتراضية (يُفضَّل ضبطها من لوحة تحكم Netlify مباشرة
+# Site settings -> Environment variables بدلاً من كتابتها هنا في مشاريع فعلية)
+[build.environment]
+  NEXT_TELEMETRY_DISABLED = "1"
+  NODE_VERSION = "20"
+
+# ملاحظة: لا داعي لإضافة [[redirects]] يدوياً - إضافة @netlify/plugin-nextjs
+# تتولى توجيه كل مسارات Next.js (صفحات، API routes، صور، إلخ) تلقائياً.
+# إضافة قاعدة catch-all يدوية هنا قد تتعارض معها وتكسر التوجيه.
+
